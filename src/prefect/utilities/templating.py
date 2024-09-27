@@ -1,6 +1,7 @@
 import enum
 import os
 import re
+import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", str, int, float, bool, dict, list, None)
 
-PLACEHOLDER_CAPTURE_REGEX = re.compile(r"({{\s*([\w\.\-\[\]$]+)\s*}})")
+PLACEHOLDER_CAPTURE_REGEX = re.compile(r"({{\s*([\w\.\-\[\]$]+)(?:\|(\w+))?\s*}})")
 BLOCK_DOCUMENT_PLACEHOLDER_PREFIX = "prefect.blocks."
 VARIABLE_PLACEHOLDER_PREFIX = "prefect.variables."
 ENV_VAR_PLACEHOLDER_PREFIX = "$"
@@ -40,6 +41,7 @@ class Placeholder(NamedTuple):
     full_match: str
     name: str
     type: PlaceholderType
+    filter_name: str
 
 
 def determine_placeholder_type(name: str) -> PlaceholderType:
@@ -77,8 +79,13 @@ def find_placeholders(template: T) -> Set[Placeholder]:
     if isinstance(template, str):
         result = PLACEHOLDER_CAPTURE_REGEX.findall(template)
         return {
-            Placeholder(full_match, name, determine_placeholder_type(name))
-            for full_match, name in result
+            Placeholder(
+                full_match,
+                name,
+                determine_placeholder_type(name),
+                filter_name,
+            )
+            for full_match, name, filter_name in result
         }
     elif isinstance(template, dict):
         return set().union(
@@ -137,7 +144,7 @@ def apply_values(
             # return NotSet to indicate that the value should not be included.
             return get_from_dict(values, list(placeholders)[0].name, NotSet)
         else:
-            for full_match, name, placeholder_type in placeholders:
+            for full_match, name, placeholder_type, _ in placeholders:
                 if placeholder_type is PlaceholderType.STANDARD:
                     value = get_from_dict(values, name, NotSet)
                 elif placeholder_type is PlaceholderType.ENV_VAR:
@@ -243,10 +250,21 @@ async def resolve_block_document_references(
         The template with block documents resolved
     """
     if isinstance(template, dict):
-        block_document_id = template.get("$ref", {}).get("block_document_id")
+        reference = template.get("$ref", {})
+        if isinstance(reference, dict):
+            block_document_id = reference.get("block_document_id")
+        else:
+            block_document_id = reference
+
+        try:
+            block_document_id = uuid.UUID(block_document_id)
+        except (TypeError, ValueError):
+            block_document_id = None
+
         if block_document_id:
             block_document = await client.read_block_document(block_document_id)
             return block_document.data
+
         updated_template = {}
         for key, value in template.items():
             updated_value = await resolve_block_document_references(
@@ -282,6 +300,17 @@ async def resolve_block_document_references(
             block_document = await client.read_block_document_by_name(
                 name=block_document_name, block_type_slug=block_type_slug
             )
+
+            if list(placeholders)[0].filter_name == "reference":
+                if len(value_keypath) > 0:
+                    raise ValueError(
+                        f"Invalid template: {template!r}. The reference filter"
+                        " cannot be used with additional block attributes."
+                    )
+                # This reference format is the only one recognized by the UI to properly
+                # display the block.
+                return {"$ref": str(block_document.id)}
+
             value = block_document.data
 
             # resolving system blocks to their data for backwards compatibility
