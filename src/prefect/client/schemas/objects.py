@@ -1023,7 +1023,9 @@ class BlockDocument(ObjectBaseModel):
     @model_validator(mode="before")
     @classmethod
     def validate_name_is_present_if_not_anonymous(cls, values):
-        return validate_name_present_on_nonanonymous_blocks(values)
+        if isinstance(values, dict):
+            return validate_name_present_on_nonanonymous_blocks(values)
+        return values
 
     @model_serializer(mode="wrap")
     def serialize_data(
