@@ -37,7 +37,10 @@ async def validate_obj(
 
     async with db.session_context() as session:
         ctx = await HydrationContext.build(
-            session=session, render_jinja=False, render_workspace_variables=True
+            session=session,
+            render_jinja=False,
+            render_workspace_variables=True,
+            render_workspace_block_documents=True,
         )
 
     hydrated_values = hydrate(values, ctx)

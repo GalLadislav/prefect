@@ -92,7 +92,7 @@ from prefect.utilities.callables import (
     parameters_to_args_kwargs,
     raise_for_reserved_arguments,
 )
-from prefect.utilities.collections import listrepr, visit_collection
+from prefect.utilities.collections import listrepr
 from prefect.utilities.filesystem import relative_path_to_current_platform
 from prefect.utilities.hashing import file_hash
 from prefect.utilities.importtools import import_object, safe_load_namespace
@@ -114,7 +114,7 @@ if TYPE_CHECKING:
     from prefect.client.orchestration import PrefectClient
     from prefect.client.types.flexible_schedule_list import FlexibleScheduleList
     from prefect.deployments.runner import RunnerDeployment
-    from prefect.flows import FlowRun
+    from prefect.flow_runs import FlowRun
     from prefect.runner.storage import RunnerStorage
 
 
@@ -521,6 +521,56 @@ class Flow(Generic[P, R]):
         new_flow._entrypoint = self._entrypoint
         return new_flow
 
+    @sync_compatible
+    async def _hydrate_parameters(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """"""
+        from prefect.utilities.schema_tools import (
+            collect_placeholders,
+            WorkspaceBlockDocument,
+            WorkspaceVariable,
+            HydrationContext,
+            hydrate,
+        )
+
+        client = get_client()
+
+        ctx = HydrationContext(render_jinja=True)
+        placeholders = collect_placeholders(hydrate(parameters, ctx))
+
+        block_document_refs = [
+            p for p in placeholders if isinstance(p, WorkspaceBlockDocument)
+        ]
+        block_documents = []
+        for block_document_ref in block_document_refs:
+            if block_document_ref.block_document_slug:
+                block_document_type, block_document_name = (
+                    block_document_ref.block_document_slug.split("/")
+                )
+                block_document = await client.read_block_document_by_name(
+                    block_document_name, block_document_type
+                )
+            else:
+                block_document = await client.read_block_document(
+                    block_document_ref.block_document_id
+                )
+            block_documents.append(block_document)
+
+        variable_refs = [p for p in placeholders if isinstance(p, WorkspaceVariable)]
+        variables = {}
+        for variable_ref in variable_refs:
+            variable = await client.read_variable_by_name(variable_ref.variable_name)
+            variables[variable.name] = variable.value
+
+        ctx = HydrationContext(
+            workspace_variables=variables,
+            workspace_block_documents=block_documents,
+            render_workspace_variables=True,
+            render_workspace_block_documents=True,
+            render_jinja=True,
+            raise_on_error=True,
+        )
+        return hydrate(parameters, ctx)
+
     def validate_parameters(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Validate parameters for compatibility with the flow by attempting to cast the inputs to the
@@ -532,20 +582,7 @@ class Flow(Generic[P, R]):
         Raises:
             ParameterTypeError: if the provided parameters are not valid
         """
-
-        def resolve_block_reference(data: Any) -> Any:
-            if isinstance(data, dict) and "$ref" in data:
-                return Block.load_from_ref(data["$ref"], _sync=True)
-            return data
-
-        try:
-            parameters = visit_collection(
-                parameters, resolve_block_reference, return_data=True
-            )
-        except (ValueError, RuntimeError) as exc:
-            raise ParameterTypeError(
-                "Failed to resolve block references in parameters."
-            ) from exc
+        parameters = self._hydrate_parameters(parameters, _sync=True)
 
         args, kwargs = parameters_to_args_kwargs(self.fn, parameters)
 

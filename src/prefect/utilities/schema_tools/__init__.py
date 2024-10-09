@@ -1,4 +1,11 @@
-from .hydration import HydrationContext, HydrationError, hydrate
+from .hydration import (
+    HydrationContext,
+    HydrationError,
+    hydrate,
+    WorkspaceVariable,
+    WorkspaceBlockDocument,
+    collect_placeholders,
+)
 from .validation import (
     CircularSchemaRefError,
     ValidationError,
@@ -13,4 +20,8 @@ __all__ = [
     "ValidationError",
     "hydrate",
     "validate",
+    "is_valid_schema",
+    "WorkspaceVariable",
+    "WorkspaceBlockDocument",
+    "collect_placeholders",
 ]
