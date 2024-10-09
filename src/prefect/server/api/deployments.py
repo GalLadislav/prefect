@@ -212,17 +212,18 @@ async def update_deployment(
                     session=session,
                     raise_on_error=True,
                     render_jinja=True,
-                    render_workspace_variables=True,
+                    render_workspace_variables=False,
+                    render_workspace_block_documents=False,
                 )
-                parameters = hydrate(dehydrated_params, ctx)
-                deployment.parameters = parameters
+                parameters_with_references = hydrate(dehydrated_params, ctx)
+                deployment.parameters = parameters_with_references
             except HydrationError as exc:
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
                     detail=f"Error hydrating deployment parameters: {exc}",
                 )
         else:
-            parameters = existing_deployment.parameters
+            parameters_with_references = existing_deployment.parameters
 
         enforce_parameter_schema = (
             deployment.enforce_parameter_schema
@@ -230,6 +231,13 @@ async def update_deployment(
             else existing_deployment.enforce_parameter_schema
         )
         if enforce_parameter_schema:
+            ctx = await HydrationContext.build(
+                session=session,
+                raise_on_error=True,
+                render_workspace_variables=True,
+                render_workspace_block_documents=True,
+            )
+            parameters = hydrate(parameters_with_references, ctx)
             # ensure that the new parameters conform to the existing schema
             if not isinstance(existing_deployment.parameter_openapi_schema, dict):
                 raise HTTPException(
@@ -632,9 +640,10 @@ async def create_flow_run_from_deployment(
                 session=session,
                 raise_on_error=True,
                 render_jinja=True,
-                render_workspace_variables=True,
+                render_workspace_variables=False,
+                render_workspace_block_documents=False,
             )
-            parameters = hydrate(dehydrated_params, ctx)
+            parameters_with_references = hydrate(dehydrated_params, ctx)
         except HydrationError as exc:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -649,6 +658,14 @@ async def create_flow_run_from_deployment(
             enforce_parameter_schema = flow_run.enforce_parameter_schema
 
         if enforce_parameter_schema:
+            ctx = await HydrationContext.build(
+                session=session,
+                raise_on_error=True,
+                render_jinja=True,
+                render_workspace_variables=True,
+                render_workspace_block_documents=True,
+            )
+            parameters = hydrate(dehydrated_params, ctx)
             if not isinstance(deployment.parameter_openapi_schema, dict):
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
@@ -704,7 +721,7 @@ async def create_flow_run_from_deployment(
             flow_id=deployment.flow_id,
             deployment_id=deployment.id,
             deployment_version=deployment.version,
-            parameters=parameters,
+            parameters=parameters_with_references,
             tags=set(deployment.tags).union(flow_run.tags),
             infrastructure_document_id=(
                 flow_run.infrastructure_document_id

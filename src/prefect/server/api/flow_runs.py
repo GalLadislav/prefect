@@ -391,6 +391,7 @@ async def resume_flow_run(
                     raise_on_error=True,
                     render_jinja=True,
                     render_workspace_variables=True,
+                    render_workspace_block_documents=True,
                 )
                 run_input = schema_tools.hydrate(run_input, hydration_context) or {}
             except schema_tools.HydrationError as exc:

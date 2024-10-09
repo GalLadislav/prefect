@@ -14,6 +14,7 @@ from typing import (
 )
 
 from prefect.client.utilities import inject_client
+from prefect.exceptions import ObjectNotFound
 from prefect.utilities.annotations import NotSet
 from prefect.utilities.collections import get_from_dict
 
@@ -243,10 +244,21 @@ async def resolve_block_document_references(
         The template with block documents resolved
     """
     if isinstance(template, dict):
-        block_document_id = template.get("$ref", {}).get("block_document_id")
-        if block_document_id:
-            block_document = await client.read_block_document(block_document_id)
-            return block_document.data
+        if reference := template.get("$ref"):
+            if isinstance(reference, dict):
+                block_document_id = reference.get("block_document_id")
+            else:
+                block_document_id = reference
+
+            if block_document_id:
+                try:
+                    block_document = await client.read_block_document(block_document_id)
+                except ObjectNotFound as exc:
+                    raise ValueError(
+                        f"Block document with id '{block_document_id}' not found"
+                    ) from exc
+                return block_document.data
+
         updated_template = {}
         for key, value in template.items():
             updated_value = await resolve_block_document_references(
@@ -279,9 +291,15 @@ async def resolve_block_document_references(
                 .name.replace(BLOCK_DOCUMENT_PLACEHOLDER_PREFIX, "")
                 .split(".", 2)
             )
-            block_document = await client.read_block_document_by_name(
-                name=block_document_name, block_type_slug=block_type_slug
-            )
+            try:
+                block_document = await client.read_block_document_by_name(
+                    name=block_document_name, block_type_slug=block_type_slug
+                )
+            except ObjectNotFound as exc:
+                raise ValueError(
+                    f"Block document with type slug '{block_type_slug}' "
+                    f"and name '{block_document_name}' not found"
+                ) from exc
             value = block_document.data
 
             # resolving system blocks to their data for backwards compatibility
@@ -326,6 +344,7 @@ async def resolve_variables(template: T, client: Optional["PrefectClient"] = Non
     Returns:
         The template with variables resolved
     """
+    # TODO: Handle ObjectNotFound exceptions to provide more verbose information
     if isinstance(template, str):
         placeholders = find_placeholders(template)
         has_variable_placeholder = any(
@@ -344,7 +363,7 @@ async def resolve_variables(template: T, client: Optional["PrefectClient"] = Non
             )
             variable = await client.read_variable_by_name(name=variable_name)
             if variable is None:
-                return ""
+                return ""  # TODO: should there be an exception raised?
             else:
                 return variable.value
         else:
